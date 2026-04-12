@@ -69,6 +69,7 @@ _default_config = {
     "bridge_pty": DEFAULT_BRIDGE_PTY,
     "emu_port": "seriala",
     "disabled_handlers": [],
+    "show_tray": True,
     "verbose": False,
 }
 
@@ -97,20 +98,14 @@ def save_config(cfg):
 
 
 def is_tray_enabled():
-    p = Path("/etc/xdg/autostart/emu-serial-bridge.desktop")
-    return p.exists()
+    cfg = load_config()
+    return cfg.get("show_tray", True)
 
 
 def set_tray_enabled(enabled):
-    src = Path("/etc/xdg/autostart/emu-serial-bridge.desktop")
-    dst = Path("/etc/xdg/autostart/emu-serial-bridge.desktop.disabled")
-    try:
-        if enabled and not src.exists() and dst.exists():
-            subprocess.run(["sudo", "/bin/mv", str(dst), str(src)], check=True)
-        elif not enabled and src.exists():
-            subprocess.run(["sudo", "/bin/mv", str(src), str(dst)], check=True)
-    except Exception as e:
-        log(f"tray toggle error: {e}")
+    cfg = load_config()
+    cfg["show_tray"] = bool(enabled)
+    save_config(cfg)
 
 
 # ── Single-instance lock ─────────────────────────────────────────────
@@ -437,7 +432,9 @@ class SettingsWindow(Gtk.Window):
 
         tray_check = Gtk.CheckButton(label="Tray icon")
         tray_check.set_active(is_tray_enabled())
-        tray_check.set_tooltip_text("Show system tray icon on login")
+        tray_check.set_tooltip_text(
+            "Show tray icon on login.\n"
+            "Bridge runs either way. Takes effect on restart.")
         tray_check.connect("toggled", lambda w: set_tray_enabled(w.get_active()))
         bottom.pack_start(tray_check, False, False, 0)
 
@@ -757,7 +754,10 @@ class MacOSBridgeApp:
         self.bridge.start()
 
         if tray_mode:
-            self._build_tray()
+            if cfg.get("show_tray", True):
+                self._build_tray()
+            # Bridge runs headless if show_tray is False;
+            # Gtk.main() keeps the process alive either way
         else:
             self._open_settings()
             # Quit when window closes in non-tray mode

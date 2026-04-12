@@ -13,7 +13,6 @@ INSTALL_DIR="/opt/$APP_ID"
 LAUNCHER="/usr/local/bin/$APP_ID"
 AUTOSTART="/etc/xdg/autostart/$APP_ID.desktop"
 DESKTOP="/usr/share/applications/$APP_ID.desktop"
-SUDOERS="/etc/sudoers.d/$APP_ID"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "unknown")"
 
@@ -42,7 +41,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     sudo /bin/rm -f  "$LAUNCHER"
     sudo /bin/rm -f  "$AUTOSTART" "${AUTOSTART}.disabled"
     sudo /bin/rm -f  "$DESKTOP"
-    sudo /bin/rm -f  "$SUDOERS"
+    sudo /bin/rm -f  "/etc/sudoers.d/$APP_ID"
     sudo /bin/rm -f  "/tmp/.$APP_ID.lock"
     sudo /bin/rm -f  /usr/share/icons/hicolor/32x32/apps/emu-serial-bridge-*.png
     if command -v gtk-update-icon-cache &>/dev/null; then
@@ -167,29 +166,16 @@ Exec=sh -c 'pkexec $INSTALL_DIR/install.sh --uninstall && notify-send "Emu Seria
 DESK
 ok "Desktop: $DESKTOP"
 
-# ── 6. Sudoers ───────────────────────────────────────────────────────
+# ── 6. Serial directory ─────────────────────────────────────────────
 
-echo "── 6. Sudoers ───────────────────────────────────────"
-
-sudo /bin/tee "$SUDOERS" >/dev/null <<SUDO
-# Emu Serial Bridge — tray icon toggle
-$USER_REAL ALL=(root) NOPASSWD: /bin/mv /etc/xdg/autostart/$APP_ID.desktop /etc/xdg/autostart/$APP_ID.desktop.disabled
-$USER_REAL ALL=(root) NOPASSWD: /bin/mv /etc/xdg/autostart/$APP_ID.desktop.disabled /etc/xdg/autostart/$APP_ID.desktop
-SUDO
-sudo /bin/chmod 0440 "$SUDOERS"
-
-ok "Tray toggle: $SUDOERS"
-
-# ── 7. Serial directory ─────────────────────────────────────────────
-
-echo "── 7. Serial directory ──────────────────────────────"
+echo "── 6. Serial directory ──────────────────────────────"
 
 /bin/mkdir -p "$SERIAL_DIR"
 ok "$SERIAL_DIR"
 
-# ── 8. Emulator configuration ───────────────────────────────────────
+# ── 7. Emulator configuration ───────────────────────────────────────
 
-echo "── 8. Emulator configuration ────────────────────────"
+echo "── 7. Emulator configuration ────────────────────────"
 
 found_emu=0
 for prefs in "$HOME_REAL/.sheepshaver_prefs" "$HOME_REAL/.basilisk_ii_prefs"; do
@@ -211,9 +197,9 @@ if [[ $found_emu -eq 0 ]]; then
     info "No emulator prefs found (configure seriala manually)"
 fi
 
-# ── 9. Migrate old installation ──────────────────────────────────────
+# ── 8. Migrate old installation ──────────────────────────────────────
 
-echo "── 9. Migrate old installation ──────────────────────"
+echo "── 8. Migrate old installation ──────────────────────"
 
 migrated=0
 if systemctl is-active --quiet macdesk-serial.service 2>/dev/null; then
@@ -238,6 +224,19 @@ for old in "$HOME_REAL/bin/macdesk_serial_bridge.py" \
         migrated=1
     fi
 done
+
+# Clean up old macos-bridge install if present
+if [[ -d /opt/macos-bridge ]]; then
+    sudo /bin/rm -rf /opt/macos-bridge
+    sudo /bin/rm -f /usr/local/bin/macos-bridge
+    sudo /bin/rm -f /etc/xdg/autostart/macos-bridge.desktop
+    sudo /bin/rm -f /etc/xdg/autostart/macos-bridge.desktop.disabled
+    sudo /bin/rm -f /usr/share/applications/macos-bridge.desktop
+    sudo /bin/rm -f /etc/sudoers.d/macos-bridge
+    sudo /bin/rm -f /usr/share/icons/hicolor/32x32/apps/macos-bridge-*.png
+    ok "Removed old macos-bridge installation"
+    migrated=1
+fi
 
 if [[ $migrated -eq 0 ]]; then
     ok "No old installation found"
