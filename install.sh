@@ -171,26 +171,48 @@ ok "Desktop: $DESKTOP"
 echo "── 6. Serial directory ──────────────────────────────"
 
 /bin/mkdir -p "$SERIAL_DIR"
-ok "$SERIAL_DIR"
+# Fix ownership and clean stale files from previous installs
+/bin/chown -R "$USER_REAL:$USER_REAL" "$SERIAL_DIR" 2>/dev/null || true
+/bin/rm -f "$SERIAL_DIR/socat.log" "$SERIAL_DIR/socat.pid" \
+           "$SERIAL_DIR/serialpair.log" \
+           "$SERIAL_DIR/macdesk_serial_bridge.py" 2>/dev/null
+# Remove stale symlinks (socat recreates them)
+for link in "$SERIAL_DIR/macmodem" "$SERIAL_DIR/macbridge" "$SERIAL_DIR/macdesk"; do
+    if [[ -L "$link" ]] && [[ ! -e "$link" ]]; then
+        /bin/rm -f "$link"
+    fi
+done
+ok "$SERIAL_DIR (cleaned)"
 
 # ── 7. Emulator configuration ───────────────────────────────────────
 
 echo "── 7. Emulator configuration ────────────────────────"
 
+configure_prefs() {
+    local prefs="$1"
+    local name="$2"
+
+    if [[ ! -f "$prefs" ]]; then
+        return 1
+    fi
+
+    # Remove ALL existing seriala lines first (prevent duplicates)
+    /bin/sed -i '/^seriala /d' "$prefs"
+
+    # Add our seriala
+    echo "seriala $SERIAL_DIR/macmodem" >> "$prefs"
+    ok "$name: seriala $SERIAL_DIR/macmodem"
+    return 0
+}
+
 found_emu=0
-for prefs in "$HOME_REAL/.sheepshaver_prefs" "$HOME_REAL/.basilisk_ii_prefs"; do
-    if [[ -f "$prefs" ]]; then
-        name=$(basename "$prefs")
+# Check all known prefs locations
+for prefs in "$HOME_REAL/.sheepshaver_prefs" \
+             "$HOME_REAL/.config/SheepShaver/prefs" \
+             "$HOME_REAL/.basilisk_ii_prefs" \
+             "$HOME_REAL/.config/BasiliskII/prefs"; do
+    if configure_prefs "$prefs" "$(basename "$(dirname "$prefs")")/$(basename "$prefs")"; then
         found_emu=1
-        if ! grep -q "^seriala" "$prefs" 2>/dev/null; then
-            echo "seriala $SERIAL_DIR/macmodem" >> "$prefs"
-            ok "Added seriala to $name"
-        elif ! grep -q "macmodem" "$prefs" 2>/dev/null; then
-            /bin/sed -i "s|^seriala .*|seriala $SERIAL_DIR/macmodem|" "$prefs"
-            ok "Updated seriala in $name"
-        else
-            ok "$name already configured"
-        fi
     fi
 done
 if [[ $found_emu -eq 0 ]]; then

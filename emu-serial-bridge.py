@@ -283,22 +283,43 @@ class SerialBridge:
         sdir = self.serial_dir
         sdir.mkdir(parents=True, exist_ok=True)
 
+        # Clean stale files that might have wrong ownership
+        for stale in ["socat.log", "socat.pid", "serialpair.log"]:
+            p = sdir / stale
+            try:
+                p.unlink(missing_ok=True)
+            except PermissionError:
+                try:
+                    subprocess.run(["sudo", "/bin/rm", "-f", str(p)],
+                                   timeout=3, check=False)
+                except Exception:
+                    pass
+
         # Clean stale symlinks
         for name in [self.cfg.get("emu_pty", DEFAULT_EMU_PTY),
                      self.cfg.get("bridge_pty", DEFAULT_BRIDGE_PTY)]:
             p = sdir / name
             if p.is_symlink() or p.exists():
-                p.unlink(missing_ok=True)
+                try:
+                    p.unlink(missing_ok=True)
+                except PermissionError:
+                    pass
 
         emu = str(self.emu_pty_path)
         bridge = str(self.bridge_pty_path)
 
         log_path = sdir / "socat.log"
+        try:
+            log_fh = open(log_path, "w")
+        except PermissionError:
+            log("socat.log permission error; writing to /dev/null")
+            log_fh = open(os.devnull, "w")
+
         self._socat_proc = subprocess.Popen(
             ["/usr/bin/socat", "-d", "-d",
              f"pty,raw,echo=0,link={emu}",
              f"pty,raw,echo=0,link={bridge}"],
-            stderr=open(log_path, "w"),
+            stderr=log_fh,
         )
         self._socat_pid = self._socat_proc.pid
         log(f"socat started (pid {self._socat_pid})")
@@ -389,6 +410,27 @@ class SerialBridge:
             self._set_connected(False)
             if self._running:
                 time.sleep(1)
+
+
+def find_emulator_prefs():
+    """Find all emulator prefs files that reference macmodem."""
+    home = Path.home()
+    candidates = [
+        home / ".sheepshaver_prefs",
+        home / ".config" / "SheepShaver" / "prefs",
+        home / ".basilisk_ii_prefs",
+        home / ".config" / "BasiliskII" / "prefs",
+    ]
+    found = []
+    for p in candidates:
+        if p.exists():
+            try:
+                content = p.read_text()
+                has_macmodem = "macmodem" in content
+                found.append((str(p), has_macmodem))
+            except Exception:
+                found.append((str(p), False))
+    return found
 
 
 # ── Settings window ──────────────────────────────────────────────────
@@ -537,6 +579,28 @@ class SettingsWindow(Gtk.Window):
         add_status_row(status_grid, 0, "socat", self._socat_label)
         add_status_row(status_grid, 1, "Emulator", self._pty_label)
 
+        # Show detected prefs files
+        prefs_found = find_emulator_prefs()
+        if prefs_found:
+            for i, (path, has_macmodem) in enumerate(prefs_found):
+                plabel = Gtk.Label()
+                plabel.set_xalign(0)
+                # Shorten home path for display
+                display_path = path.replace(str(Path.home()), "~")
+                if has_macmodem:
+                    plabel.set_markup(
+                        f"<span foreground='#639922'>{display_path}</span>")
+                else:
+                    plabel.set_markup(
+                        f"<span foreground='#E24B4A'>{display_path} (seriala not set)</span>")
+                add_status_row(status_grid, 2 + i, "Prefs" if i == 0 else "", plabel)
+        else:
+            plabel = Gtk.Label()
+            plabel.set_xalign(0)
+            plabel.set_markup(
+                "<span foreground='#E24B4A'>No emulator prefs found</span>")
+            add_status_row(status_grid, 2, "Prefs", plabel)
+
         vbox.pack_start(status_grid, False, False, 0)
 
         self._update_status()
@@ -562,7 +626,9 @@ class SettingsWindow(Gtk.Window):
         pty_path = f"{serial_dir}/{emu_pty}"
 
         for prefs_path in [home / ".sheepshaver_prefs",
-                           home / ".basilisk_ii_prefs"]:
+                           home / ".config" / "SheepShaver" / "prefs",
+                           home / ".basilisk_ii_prefs",
+                           home / ".config" / "BasiliskII" / "prefs"]:
             if prefs_path.exists():
                 content = prefs_path.read_text()
                 old_key = old_port  # seriala or serialb
@@ -955,6 +1021,17 @@ def print_status():
             else:
                 enabled.append(name)
     print(f"  Handlers:  {', '.join(enabled) if enabled else 'none'}")
+
+    # Prefs files
+    prefs_found = find_emulator_prefs()
+    if prefs_found:
+        for path, has_macmodem in prefs_found:
+            display = path.replace(str(Path.home()), "~")
+            status = "ok" if has_macmodem else "seriala NOT set"
+            print(f"  Prefs:     {display} ({status})")
+    else:
+        print(f"  Prefs:     none found")
+
     print()
 
 
