@@ -17,7 +17,6 @@ from pathlib import Path
 NAME = "Brightness"
 DESCRIPTION = "sysfs PWM on GPIO12, shared with brightness-control tray"
 
-PWM_PERIOD = 40000  # 25 kHz
 CFGDIR = Path.home() / ".config" / "brightness-control"
 CFG = CFGDIR / "settings.json"
 
@@ -31,13 +30,24 @@ def _find_pwm_channel():
     return None
 
 
+def _get_period():
+    chan = _find_pwm_channel()
+    if not chan:
+        return 40000
+    try:
+        return int((chan / "period").read_text().strip())
+    except (OSError, ValueError):
+        return 40000
+
+
 def _get_brightness():
     chan = _find_pwm_channel()
     if not chan:
         return None
     try:
         duty = int((chan / "duty_cycle").read_text().strip())
-        return max(0, min(100, round(duty * 100 / PWM_PERIOD)))
+        period = _get_period()
+        return max(0, min(100, round(duty * 100 / period)))
     except (OSError, ValueError):
         return None
 
@@ -47,7 +57,8 @@ def _set_brightness(pct):
     chan = _find_pwm_channel()
     if not chan:
         return False
-    duty = PWM_PERIOD * pct // 100
+    period = _get_period()
+    duty = period * pct // 100
     try:
         (chan / "duty_cycle").write_text(str(duty))
         return True
