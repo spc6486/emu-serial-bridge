@@ -136,13 +136,48 @@ tray app. Returns charge percentage and charging state (CHG/DIS/UNK).
 Controls PipeWire audio via `wpctl` and headphone amplifier via GPIO24. Works
 with the [volume-control](https://github.com/spc6486/volume-control) tray app.
 
-## Adding handlers
+## Plugin contract
 
-Drop a Python file into `/opt/emu-serial-bridge/handlers/` and restart:
+Handlers are Python modules in `/opt/emu-serial-bridge/handlers/`. The bridge
+discovers and loads them automatically at startup. Files starting with `_` are
+ignored.
+
+### Required exports
+
+| Export | Type | Purpose |
+|---|---|---|
+| `COMMANDS` | `dict[str, callable]` | Maps command strings to `func(args, write)` callables. The bridge dispatches by exact match on the command name. |
+
+Each command function receives two arguments:
+
+- `args` (str) — everything after the command name, or empty string
+- `write` (callable) — call `write("OK EXAMPLE")` to send a reply back to the emulator
+
+### Optional exports
+
+| Export | Type | Purpose |
+|---|---|---|
+| `NAME` | `str` | Display name for the Settings window. Defaults to filename. |
+| `DESCRIPTION` | `str` | One-line description shown in the Handlers tab. |
+| `init(config=None)` | function | Called once at startup after the module is loaded. |
+| `cleanup()` | function | Called on bridge shutdown. |
+| `reload()` | function | Called on SIGHUP. Must be idempotent and non-blocking. Use for picking up config changes without a full restart. |
+
+Handlers without `reload()` are silently skipped on SIGHUP — no warning, no
+error. An exception in one handler's `reload()` is logged but does not prevent
+other handlers from reloading.
+
+### Example handler
 
 ```python
 NAME = "My Handler"
 DESCRIPTION = "What it does"
+
+def init(config=None):
+    pass  # one-time setup
+
+def reload():
+    pass  # re-read config, idempotent
 
 def _cmd_example(args, write):
     write("OK EXAMPLE")
@@ -152,8 +187,19 @@ COMMANDS = {
 }
 ```
 
-Optional: define `init(config=None)` and `cleanup()` for setup/teardown.
+Drop the file into `/opt/emu-serial-bridge/handlers/` and restart the bridge.
 Handlers can be enabled/disabled in the Settings window without removing files.
+
+### SIGHUP reload
+
+Send SIGHUP to reload all handlers that implement `reload()`:
+
+```bash
+kill -HUP $(pgrep -f emu-serial-bridge.py)
+```
+
+This is useful for plugins that read external config files — they can re-read
+their config without a full bridge restart.
 
 ## Configuration
 

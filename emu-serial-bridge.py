@@ -197,6 +197,17 @@ class HandlerRegistry:
                 except Exception:
                     pass
 
+    def reload_all(self):
+        """Call reload() on every handler that implements it."""
+        for name, mod in self.handlers.items():
+            fn = getattr(mod, "reload", None)
+            if callable(fn):
+                try:
+                    fn()
+                    log(f"reloaded handler: {name}")
+                except Exception as e:
+                    log(f"reload() failed for handler {name}: {e}")
+
 
 # ── socat + PTY bridge ───────────────────────────────────────────────
 
@@ -1063,6 +1074,15 @@ def main():
 
     tray_mode = "--tray" in sys.argv
     app = MacOSBridgeApp(tray_mode)
+
+    # SIGHUP → reload() on all handlers that implement it
+    def _on_sighup():
+        log("SIGHUP received — reloading handlers")
+        app.registry.reload_all()
+        return GLib.SOURCE_CONTINUE
+
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, _on_sighup)
+
     Gtk.main()
 
 
