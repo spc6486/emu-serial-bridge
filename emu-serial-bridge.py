@@ -399,7 +399,7 @@ class SerialBridge:
 
                                 def write_line(s):
                                     try:
-                                        f.write((s + "\r\n").encode("ascii"))
+                                        f.write((s + "\r").encode("ascii"))
                                         f.flush()
                                     except Exception:
                                         pass

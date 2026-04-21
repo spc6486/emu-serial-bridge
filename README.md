@@ -136,6 +136,28 @@ tray app. Returns charge percentage and charging state (CHG/DIS/UNK).
 Controls PipeWire audio via `wpctl` and headphone amplifier via GPIO24. Works
 with the [volume-control](https://github.com/spc6486/volume-control) tray app.
 
+### Home Assistant
+
+Bridges Mac-side apps to a Home Assistant instance over its REST API, exposing
+aliased devices on configurable pages with four control types (toggle, dimmer,
+scene, momentary). Config lives at `/etc/emu-serial-bridge/homeassistant.conf`
+(mode 600; contains a long-lived access token). The installer creates a stub
+config on first install and preserves it on upgrade.
+
+Protocol summary (see `handlers/homeassistant.py` docstring for full spec):
+
+```
+HA PAGES               -> HA|PAGES|Home|Lights|Scenes
+HA LIST [page]         -> HA|PAGE|Home / HA|01|... / HA|END
+HA ON|OFF|TOGGLE <id>  -> OK|<id>|<name>|<domain>|<state>|<ctl>|<val>
+HA DIM <id> <0-100>    -> OK|...|<state>|dimmer|<val>
+HA SCENE|PRESS <id>    -> OK|<id>|<name>|scene|OFF|scene|
+```
+
+Errors: `ERR|<CODE>[|<id>[|<msg>]]`. Action replies are **intent-based** — the
+bridge reports what it told HA to do, not a fresh read, to avoid eventual-
+consistency races. Manual `HA LIST` reconciles if actual state diverges.
+
 ## Plugin contract
 
 Handlers are Python modules in `/opt/emu-serial-bridge/handlers/`. The bridge

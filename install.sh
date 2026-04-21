@@ -52,6 +52,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     ok "Uninstall complete"
     echo ""
     info "Config left at $HOME_REAL/.config/$APP_ID/ (delete manually if wanted)"
+    info "HA config left at /etc/emu-serial-bridge/ (contains token; remove manually)"
     info "Stale PTY symlinks in $SERIAL_DIR/ are harmless"
     echo ""
     exit 0
@@ -69,7 +70,8 @@ echo ""
 echo "── 1. Dependencies ──────────────────────────────────"
 
 DEPS=(python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1
-      ayatana-indicator-application socat)
+      ayatana-indicator-application socat
+      python3-yaml python3-requests)
 MISSING=()
 for pkg in "${DEPS[@]}"; do
     if ! dpkg -s "$pkg" &>/dev/null; then
@@ -183,6 +185,49 @@ for link in "$SERIAL_DIR/macmodem" "$SERIAL_DIR/macbridge" "$SERIAL_DIR/macdesk"
     fi
 done
 ok "$SERIAL_DIR (cleaned)"
+
+# ── 6b. Home Assistant handler config ────────────────────────────────
+
+echo "── 6b. Home Assistant handler config ────────────────"
+
+HA_CONF_DIR="/etc/emu-serial-bridge"
+HA_CONF_FILE="$HA_CONF_DIR/homeassistant.conf"
+
+sudo /bin/mkdir -p "$HA_CONF_DIR"
+sudo /bin/chown "$USER_REAL:$USER_REAL" "$HA_CONF_DIR"
+sudo /bin/chmod 755 "$HA_CONF_DIR"
+
+if [[ -f "$HA_CONF_FILE" ]]; then
+    # Preserve existing config (contains long-lived HA token).
+    # Only fix ownership/permissions in case they drifted.
+    sudo /bin/chown "$USER_REAL:$USER_REAL" "$HA_CONF_FILE"
+    sudo /bin/chmod 600 "$HA_CONF_FILE"
+    ok "$HA_CONF_FILE (preserved, mode 600)"
+else
+    sudo /bin/tee "$HA_CONF_FILE" >/dev/null <<'HACONF'
+# Home Assistant handler config for emu-serial-bridge.
+# Populate url, token, and aliases to enable the HA handler.
+# Mode 600 (contains long-lived access token). Do not commit.
+#
+# homeassistant:
+#   url: http://homeassistant.local:8123
+#   token: <long-lived-access-token>
+#   pages:
+#     - Home
+#     - Lights
+#   aliases:
+#     - id: 01
+#       entity: light.living_room
+#       name: Living Room
+#       page: Home
+#       control: auto   # or: toggle | dimmer | scene | momentary
+HACONF
+    sudo /bin/chown "$USER_REAL:$USER_REAL" "$HA_CONF_FILE"
+    sudo /bin/chmod 600 "$HA_CONF_FILE"
+    ok "$HA_CONF_FILE (created stub, mode 600)"
+    info "Edit $HA_CONF_FILE to configure HA, then:"
+    info "  pkill -SIGHUP -f emu-serial-bridge.py"
+fi
 
 # ── 7. Emulator configuration ───────────────────────────────────────
 
