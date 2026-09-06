@@ -107,7 +107,7 @@ Line-oriented ASCII, CR or CRLF terminated.
 | `BRI?` / `BRIGHT?` | `BRIGHT <n>` | brightness |
 | `AUTO <0\|1>` | `OK AUTO <0\|1>` | brightness |
 | `AUTO?` | `AUTO <0\|1>` | brightness |
-| `BAT?` / `BAT` | `BAT <pct> <CHG\|DIS\|UNK>` | battery |
+| `BAT?` / `BAT` | `BAT <pct> <ac> <min> <watts> <chg> <shdn>` | battery |
 | `VOL <0-100>` | `OK VOL <n>` | volume |
 | `VOL?` | `VOL <n>` | volume |
 | `MUTE <0\|1>` | `OK MUTE <0\|1>` | volume |
@@ -129,34 +129,29 @@ channel and config file (`~/.config/brightness-control/settings.json`) with the
 
 Reads battery status from `$XDG_RUNTIME_DIR/battery-monitor-status.json`,
 written by the [battery-monitor](https://github.com/spc6486/battery-monitor)
-tray app. Returns charge percentage and charging state (CHG/DIS/UNK).
+tray app.
+
+Response fields:
+
+| Field | Values | Meaning |
+|---|---|---|
+| `pct` | 0–100 | Battery percentage |
+| `ac` | `CHG` / `DIS` / `UNK` | Plugged in / on battery / unknown |
+| `min` | integer or `-1` | Estimated runtime in minutes |
+| `watts` | float or `-1` | Current output power draw |
+| `chg` | `0` / `1` | Battery actively charging |
+| `shdn` | `0` / `1` | UPS has requested shutdown (low battery) |
+
+Example: `BAT 81 CHG 332 9.1 1 0` — 81%, plugged in, ~332 min runtime,
+9.1 W draw, charging, no shutdown pending.
+
+The first two fields are unchanged from v1.0 so existing Mac-side clients
+that only parse `pct` and `ac` continue to work.
 
 ### Volume
 
 Controls PipeWire audio via `wpctl` and headphone amplifier via GPIO24. Works
 with the [volume-control](https://github.com/spc6486/volume-control) tray app.
-
-### Home Assistant
-
-Bridges Mac-side apps to a Home Assistant instance over its REST API, exposing
-aliased devices on configurable pages with four control types (toggle, dimmer,
-scene, momentary). Config lives at `/etc/emu-serial-bridge/homeassistant.conf`
-(mode 600; contains a long-lived access token). The installer creates a stub
-config on first install and preserves it on upgrade.
-
-Protocol summary (see `handlers/homeassistant.py` docstring for full spec):
-
-```
-HA PAGES               -> HA|PAGES|Home|Lights|Scenes
-HA LIST [page]         -> HA|PAGE|Home / HA|01|... / HA|END
-HA ON|OFF|TOGGLE <id>  -> OK|<id>|<name>|<domain>|<state>|<ctl>|<val>
-HA DIM <id> <0-100>    -> OK|...|<state>|dimmer|<val>
-HA SCENE|PRESS <id>    -> OK|<id>|<name>|scene|OFF|scene|
-```
-
-Errors: `ERR|<CODE>[|<id>[|<msg>]]`. Action replies are **intent-based** — the
-bridge reports what it told HA to do, not a fresh read, to avoid eventual-
-consistency races. Manual `HA LIST` reconciles if actual state diverges.
 
 ## Plugin contract
 
