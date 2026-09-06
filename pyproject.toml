@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emu-serial-bridge"
+version = "1.2.0"
+description = "Serial bridge between classic Mac OS emulators and Raspberry Pi hardware via virtual PTY"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["emulator", "serial", "raspberry-pi", "sheepshaver", "basiliskii"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+]
+
+[tool.setuptools]
+# Non-ASCII module name ("emu-serial-bridge.py") is not a valid package name, so
+# primary distribution remains via install.sh. This config keeps pytest + tooling
+# co-located with the repo. The runtime entry point is installed by install.sh.
+py-modules = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+# Hardware-dependent / subprocess controls are exercised through monkeypatching;
+# the test suite itself needs no root, socat, or a Raspberry Pi.
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+# Bug-catching rules only (F = pyflakes, E9 = logic errors). The legacy GTK
+# monolith carries pre-existing style noise (E7xx, E501) — not worth churning
+# a 1000-line autostart script over. See the hearth ghostfix precedent.
+select = ["F", "E9"]

@@ -12,8 +12,6 @@ Usage:
 """
 
 import fcntl
-import importlib
-import importlib.util
 import json
 import os
 import signal
@@ -24,11 +22,14 @@ import time
 from collections import deque
 from pathlib import Path
 
+from bridge_core import dispatch as core_dispatch
+from bridge_core import load_handlers as core_load_handlers
+
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
-from gi.repository import Gtk, Gdk, GLib, GObject, AyatanaAppIndicator3 as AppIndicator3
+from gi.repository import Gtk, Gdk, GLib, AyatanaAppIndicator3 as AppIndicator3
 
 # ── Paths ────────────────────────────────────────────────────────────
 
@@ -135,59 +136,18 @@ class HandlerRegistry:
 
     def load_all(self, disabled_list):
         self.disabled = set(disabled_list)
-        if not HANDLER_DIR.is_dir():
-            log(f"handler dir not found: {HANDLER_DIR}")
-            return
-
-        for path in sorted(HANDLER_DIR.glob("*.py")):
-            if path.name.startswith("_"):
-                continue
-            name = path.stem
-            try:
-                spec = importlib.util.spec_from_file_location(
-                    f"handlers.{name}", path)
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                self.handlers[name] = mod
-
-                if name not in self.disabled:
-                    cmds = getattr(mod, "COMMANDS", {})
-                    for cmd, func in cmds.items():
-                        self.commands[cmd.upper()] = (func, name)
-
-                if hasattr(mod, "init"):
-                    mod.init()
-
-                hname = getattr(mod, "NAME", name)
-                ncmds = len(getattr(mod, "COMMANDS", {}))
-                state = "disabled" if name in self.disabled else f"{ncmds} commands"
-                log(f"handler: {hname} ({state})")
-            except Exception as e:
-                log(f"handler load error ({name}): {e}")
+        handlers, commands = core_load_handlers(
+            HANDLER_DIR, disabled_list, log=log)
+        self.handlers = handlers
+        self.commands = commands
+        for name, mod in handlers.items():
+            hname = getattr(mod, "NAME", name)
+            ncmds = len(getattr(mod, "COMMANDS", {}) or {})
+            state = "disabled" if name in self.disabled else f"{ncmds} commands"
+            log(f"handler: {hname} ({state})")
 
     def dispatch(self, line, write_func):
-        upper = line.strip()
-        if not upper:
-            return
-
-        # Split into command and args
-        parts = upper.split(None, 1)
-        cmd = parts[0].upper()
-        args = parts[1] if len(parts) > 1 else ""
-
-        # Try exact match first (for commands like "BRI?" "AUTO?")
-        if cmd in self.commands:
-            func, hname = self.commands[cmd]
-            func(args, write_func)
-            return
-
-        # Try command with args joined (e.g. "BAT?" as one token)
-        if upper.upper() in self.commands:
-            func, hname = self.commands[upper.upper()]
-            func("", write_func)
-            return
-
-        write_func("ERR UNKNOWN")
+        core_dispatch(self.commands, line, write_func)
 
     def cleanup_all(self):
         for name, mod in self.handlers.items():
@@ -407,8 +367,6 @@ class SerialBridge:
                                         log(f"→ {s}")
 
                                 if cfg.get("verbose"):
-                                    log(f"← {line_str}")
-                                else:
                                     log(f"← {line_str}")
 
                                 self.registry.dispatch(line_str, write_line)
@@ -939,9 +897,9 @@ def print_status():
         if procs:
             print(f"  Bridge:    running (pid {procs[0].split()[0]})")
         else:
-            print(f"  Bridge:    not running")
+            print("  Bridge:    not running")
     except Exception:
-        print(f"  Bridge:    unknown")
+        print("  Bridge:    unknown")
 
     # socat
     try:
@@ -953,9 +911,9 @@ def print_status():
         if procs:
             print(f"  socat:     running (pid {procs[0].split()[0]})")
         else:
-            print(f"  socat:     not running")
+            print("  socat:     not running")
     except Exception:
-        print(f"  socat:     unknown")
+        print("  socat:     unknown")
 
     # PTY links
     if emu_pty.is_symlink():
@@ -1015,9 +973,9 @@ def print_status():
         if emu_procs:
             print(f"  Emulator:  {', '.join(emu_procs)}")
         else:
-            print(f"  Emulator:  not connected")
+            print("  Emulator:  not connected")
     else:
-        print(f"  Emulator:  PTY not available")
+        print("  Emulator:  PTY not available")
 
     # Handlers
     enabled = []
@@ -1041,7 +999,7 @@ def print_status():
             status = "ok" if has_macmodem else "seriala NOT set"
             print(f"  Prefs:     {display} ({status})")
     else:
-        print(f"  Prefs:     none found")
+        print("  Prefs:     none found")
 
     print()
 

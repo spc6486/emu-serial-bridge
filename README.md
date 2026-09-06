@@ -246,6 +246,26 @@ Settings are stored in `~/.config/emu-serial-bridge/config.json`:
 | `~/.serial/macmodem` | Emulator-side PTY (socat) |
 | `~/.serial/macbridge` | Bridge-side PTY (socat) |
 
+## Development
+
+The bridge's protocol core is split into a GI-free module
+(`bridge_core.py`: handler discovery, line parsing, dispatch) and the GTK
+frontend (`emu-serial-bridge.py`), so the wire protocol can be tested without
+a display, PyGObject, or the Pi's hardware.
+
+```bash
+# From a checkout
+python3 -m venv .venv
+. .venv/bin/activate
+pip install pytest PyYAML requests ruff
+pytest            # 80 tests, no hardware/root/socat needed
+ruff check .      # bug-catching rules (F, E9)
+```
+
+Tests exercise the battery/brightness/volume/Home Assistant handlers by
+monkeypatching sysfs, `wpctl`, and the HA HTTP session. Nothing touches real
+GPIO, /sys/class/pwm, or a live Home Assistant instance.
+
 ## Uninstall
 
 ```bash

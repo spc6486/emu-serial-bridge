@@ -12,6 +12,10 @@ Commands:
     HP?            Query headphone amp state
 """
 
+from __future__ import annotations
+
+import importlib.util
+import os
 import subprocess
 
 NAME = "Volume"
@@ -24,11 +28,7 @@ _gpio_available = False
 
 def init(config=None):
     global _gpio_available
-    try:
-        from gpiozero import OutputDevice
-        _gpio_available = True
-    except ImportError:
-        _gpio_available = False
+    _gpio_available = importlib.util.find_spec("gpiozero") is not None
 
 
 def _get_volume():
@@ -77,8 +77,6 @@ def _get_hp():
     if not _gpio_available:
         return None
     try:
-        from gpiozero import OutputDevice
-        # Read GPIO24 state via sysfs
         gpio_path = f"/sys/class/gpio/gpio{GPIO_HP}/value"
         if os.path.exists(gpio_path):
             with open(gpio_path) as f:
@@ -92,7 +90,6 @@ def _set_hp(active):
     if not _gpio_available:
         return False
     try:
-        from gpiozero import OutputDevice
         gpio_path = f"/sys/class/gpio/gpio{GPIO_HP}/value"
         if os.path.exists(gpio_path):
             with open(gpio_path, "w") as f:
@@ -170,8 +167,6 @@ def _cmd_hp_query(args, write):
     else:
         write("ERR HP NODATA")
 
-
-import os
 
 COMMANDS = {
     "VOL": _cmd_vol_set,
