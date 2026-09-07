@@ -71,7 +71,7 @@ log = logging.getLogger("emu-serial-bridge.ha")
 CONFIG_PATH = Path("/etc/emu-serial-bridge/homeassistant.conf")
 STATE_TTL_SECONDS = 2.0
 HTTP_TIMEOUT_SECONDS = 3.0
-HANDLER_VERSION = "3.0.0"
+HANDLER_VERSION = "3.1.0"
 
 
 # --- Control type helpers --------------------------------------------
@@ -223,6 +223,43 @@ class HAClient:
 
     # ---- wire-line formatters ----
 
+    NAME_MAX = 40
+
+    def _display_name(self, alias: dict, state: dict | None) -> str:
+        """Resolve a device's display name.
+
+        An explicit ``name:`` in the config always wins, so a device can be
+        given a short label suited to a small screen.  Otherwise Home
+        Assistant's friendly_name is used, so a rename in HA propagates
+        without editing the config.  The entity_id is the last resort, for an
+        alias whose entity no longer exists -- which makes a stale alias
+        self-identifying on the wire.
+
+        Names are capped because HA names run long and every byte counts
+        against the gateway's 3072-byte reply buffer.
+        """
+        name = alias.get("name")
+        if not name:
+            attrs = (state or {}).get("attributes") or {}
+            name = attrs.get("friendly_name")
+        if not name:
+            name = alias["entity"]
+        return self._elide(str(name).strip(), self.NAME_MAX)
+
+    @staticmethod
+    def _elide(name: str, limit: int) -> str:
+        """Shorten from the middle, never the tail.
+
+        Home Assistant puts the distinguishing word last: the four switches on
+        one Nest Protect differ only by their Pathlight / Heads Up / Nightly
+        Promise / Steam Check suffix. Cutting the tail renders them identical.
+        """
+        if len(name) <= limit:
+            return name
+        head = (limit - 3) // 2
+        tail = limit - 3 - head
+        return name[:head].rstrip() + "..." + name[len(name) - tail:].lstrip()
+
     def _device_fields(self, alias: dict, state_override: str | None = None,
                        value_override: str | None = None) -> str:
         """Format a device as pipe-delimited fields.
@@ -230,10 +267,10 @@ class HAClient:
         (no HA| or OK| prefix; caller prepends)."""
         entity = alias["entity"]
         domain = entity.split(".", 1)[0]
-        name = self._sanitize(alias.get("name", entity))
         aid = str(alias["id"]).zfill(2)
         s = self._states().get(entity)
         ctl = self._effective_control(alias, s)
+        name = self._sanitize(self._display_name(alias, s))
 
         if state_override is not None:
             wire_state = state_override
