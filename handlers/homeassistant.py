@@ -68,10 +68,25 @@ except ImportError:
 
 log = logging.getLogger("emu-serial-bridge.ha")
 
+import sys
+# The bridge loads handlers by file path, so this directory is not
+# necessarily on sys.path; without this, `import ha_discovery` fails silently
+# and discovery degrades to an empty device list.
+import os as _os
+_HANDLER_DIR = _os.path.dirname(_os.path.abspath(__file__))
+if _HANDLER_DIR not in sys.path:
+    sys.path.insert(0, _HANDLER_DIR)
+
+try:
+    import ha_discovery as _disc
+except ImportError as _e:    # discovery unavailable; alias mode still works
+    log.warning("ha_discovery unavailable (%s); discovery disabled", _e)
+    _disc = None
+
 CONFIG_PATH = Path("/etc/emu-serial-bridge/homeassistant.conf")
 STATE_TTL_SECONDS = 2.0
 HTTP_TIMEOUT_SECONDS = 3.0
-HANDLER_VERSION = "3.1.0"
+HANDLER_VERSION = "3.3.0"
 
 
 # --- Control type helpers --------------------------------------------
@@ -159,6 +174,10 @@ class HAClient:
         self._cache: dict[str, dict] = {}
         self._cache_expiry = 0.0
         self._lock = threading.Lock()
+        # Discovery: populated from the on-disk cache when enabled.
+        self.discovery = False
+        self.groups = None
+        self.devices: dict[str, dict] = {}   # entity_id -> {id,name,page,flags}
 
     # ---- low-level HA API ----
 
@@ -200,8 +219,34 @@ class HAClient:
 
     # ---- alias resolution ----
 
+    def _resolve_discovered(self, dev_id: str) -> str | None:
+        """entity_id for a discovered device id, ignoring leading zeros."""
+        want = str(dev_id).lstrip("0") or "0"
+        for eid, d in self.devices.items():
+            if str(d.get("id", "")).lstrip("0") == want:
+                return eid
+        return None
+
     def _resolve(self, alias_id: str) -> dict | None:
         stripped = alias_id.lstrip("0") or "0"
+
+        # With discovery enabled the cache is the sole authority.  Alias ids
+        # and discovered ids both begin at 01 and denote different devices, so
+        # consulting aliases as a fallback would silently actuate the wrong
+        # one rather than reporting that the id is unknown.
+        if self.discovery:
+            for eid, dev in self.devices.items():
+                did = str(dev.get("id", "")).lstrip("0") or "0"
+                if did == stripped:
+                    return {
+                        "id": dev.get("id"),
+                        "entity": eid,
+                        "name": dev.get("name"),
+                        "page": dev.get("page"),
+                        "control": dev.get("control") or "auto",
+                    }
+            return None
+
         for a in self.aliases:
             aid = str(a.get("id", "")).lstrip("0") or "0"
             if aid == stripped:
@@ -290,7 +335,80 @@ class HAClient:
 
     # ---- protocol handlers ----
 
+    # ---- discovery ----
+
+    def load_discovered(self) -> int:
+        """Read the discovery cache into self.devices.  Returns the count."""
+        if _disc is None:
+            self.devices = {}
+            return 0
+        cache = _disc.load_cache()
+        self.devices = cache.get("devices") or {}
+        return len(self.devices)
+
+    def cmd_discover(self) -> str:
+        """Enumerate Home Assistant and rewrite the device cache."""
+        if _disc is None:
+            return "ERR|NODISCOVERY\r"
+        try:
+            summary = _disc.discover(self)
+        except Exception as e:
+            log.exception("discovery failed: %s", e)
+            return "ERR|UNREACHABLE\r"
+        self.load_discovered()
+        pages = self._page_layout()
+        return (f"OK|DISCOVER|{summary['devices']}|{len(pages)}"
+                f"|{summary['added']}|{summary['removed']}\r")
+
+    def _page_layout(self):
+        """Ordered [(page, [(area, [entity_id...])...])...] from the cache."""
+        if _disc is None or not self.devices:
+            return []
+        return _disc.build_pages(self.devices, self.groups)
+
+    def _discovered_fields(self, entity: str, dev: dict) -> str:
+        """Wire fields for a discovered device (no HA| or OK| prefix).
+
+        Mirrors _device_fields but sources name and id from the cache and
+        appends the flags field."""
+        s = self._states().get(entity)
+        domain = entity.split(".", 1)[0]
+        # Prefer the type recorded at discovery: detect_control_type reads the
+        # domain out of state["entity_id"], which is missing when Home
+        # Assistant cannot resolve the entity, and every device would then
+        # degrade to a plain toggle.
+        ctl = dev.get("control")
+        if not ctl:
+            if s and not s.get("entity_id"):
+                s = dict(s, entity_id=entity)
+            ctl = detect_control_type(s) if s else "toggle"
+
+        if domain in ("scene", "script"):
+            wire_state = "OFF"
+        else:
+            wire_state = state_to_wire(s)
+
+        # Always report brightness for a dimmer, including zero when it is off.
+        # An empty field means "unknown" to the client, which would make an
+        # off light indistinguishable from one whose level could not be read.
+        val = ""
+        if ctl == "dimmer" and domain != "cover":
+            val = str(brightness_pct(s))
+        elif ctl == "dimmer":
+            pos = ((s or {}).get("attributes") or {}).get("current_position")
+            val = str(int(pos)) if pos is not None else ("100" if wire_state == "ON" else "0")
+
+        name = self._sanitize(self._elide(str(dev.get("name") or entity),
+                                          self.NAME_MAX))
+        return (f"{dev.get('id')}|{name}|{domain}|{wire_state}|{ctl}|{val}"
+                f"|{dev.get('flags', '')}")
+
     def cmd_pages(self) -> str:
+        if self.discovery:
+            pages = [p for p, _ in self._page_layout()]
+            if not pages:
+                return "HA|PAGES|Home\r"
+            return "HA|PAGES|" + "|".join(self._sanitize(p) for p in pages) + "\r"
         if not self.pages:
             return "HA|PAGES|Home\r"
         return "HA|PAGES|" + "|".join(self.pages) + "\r"
@@ -299,6 +417,9 @@ class HAClient:
         states = self._states()
         if not states:
             return "ERR|UNREACHABLE\r"
+
+        if self.discovery:
+            return self._list_discovered(page_filter)
 
         # Group aliases by page, in self.pages order
         by_page: dict[str, list[dict]] = {p: [] for p in self.pages}
@@ -323,6 +444,65 @@ class HAClient:
 
         lines.append("HA|END")
         return "\r".join(lines) + "\r"
+
+    def _list_discovered(self, page_filter: str | None) -> str:
+        layout = self._page_layout()
+        if not layout:
+            return "HA|END\r"
+
+        lines = []
+        for page, sections in layout:
+            if page_filter is not None and page != page_filter:
+                continue
+            # A single-area page needs no header: the page name is already in
+            # the popup, so the marker would only repeat it.
+            emit_headers = len(sections) > 1 or page_filter is None
+            for area, entities in sections:
+                if emit_headers:
+                    lines.append(f"HA|PAGE|{self._sanitize(area)}")
+                for eid in entities:
+                    dev = self.devices.get(eid)
+                    if dev:
+                        lines.append("HA|" + self._discovered_fields(eid, dev))
+
+        lines.append("HA|END")
+        return "\r".join(lines) + "\r"
+
+    def cmd_area(self, area: str, on: bool) -> str:
+        """Switch every actuable device in an area.
+
+        homeassistant.turn_on/off accepts a list, so this is one HTTP call
+        regardless of how many devices the area holds."""
+        if not self.discovery:
+            return "ERR|NODISCOVERY\r"
+        if not area:
+            return "ERR|BADARG\r"
+
+        wanted = area.strip().lower()
+        targets = []
+        for eid, dev in self.devices.items():
+            if (dev.get("page") or "").strip().lower() != wanted:
+                continue
+            domain = eid.split(".", 1)[0]
+            # A scene or script is a one-shot action, not something with an
+            # on/off state; including them would make "all off" fire them.
+            if domain in ("scene", "script"):
+                continue
+            if "C" in (dev.get("flags") or ""):
+                continue
+            targets.append(eid)
+
+        if not targets:
+            return f"ERR|UNKNOWN|{self._sanitize(area)}\r"
+
+        service = "turn_on" if on else "turn_off"
+        ok = self._call_service("homeassistant", service,
+                                {"entity_id": targets})
+        if not ok:
+            return f"ERR|FAILED|{self._sanitize(area)}\r"
+        self._invalidate()
+        return (f"OK|AREA|{self._sanitize(area)}|{'ON' if on else 'OFF'}"
+                f"|{len(targets)}\r")
 
     def cmd_on(self, alias_id: str) -> str:
         a = self._resolve(alias_id)
@@ -462,7 +642,15 @@ def _build_client() -> HAClient | None:
                 pages.append(p); seen.add(p)
         if not pages:
             pages = ["Home"]
-    return HAClient(url, token, aliases, pages)
+    client = HAClient(url, token, aliases, pages)
+    client.discovery = bool(ha.get("discovery"))
+    client.groups = ha.get("groups")
+    if client.discovery:
+        n = client.load_discovered()
+        log.info("discovery enabled: %d devices cached", n)
+        if n == 0:
+            log.info("no discovery cache yet -- send 'HA DISCOVER' to build it")
+    return client
 
 
 def _ensure_fresh() -> None:
@@ -534,6 +722,8 @@ def handle(line: str) -> str | None:
     cmd = parts[1].upper()
 
     try:
+        if cmd == "DISCOVER":
+            return _client.cmd_discover()
         if cmd == "PAGES":
             return _client.cmd_pages()
         if cmd == "LIST":
@@ -547,6 +737,12 @@ def handle(line: str) -> str | None:
             return _client.cmd_toggle(parts[2])
         if cmd == "DIM" and len(parts) >= 4:
             return _client.cmd_dim(parts[2], parts[3])
+        if cmd == "AREA" and len(parts) >= 4:
+            state = parts[-1].upper()
+            name = " ".join(parts[2:-1])
+            if state not in ("ON", "OFF"):
+                return "ERR|BADARG\r"
+            return _client.cmd_area(name, state == "ON")
         if cmd in ("SCENE", "PRESS") and len(parts) >= 3:
             return _client.cmd_scene(parts[2])
     except Exception as e:
