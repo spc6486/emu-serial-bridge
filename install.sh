@@ -105,6 +105,7 @@ sudo /bin/rm -rf "$INSTALL_DIR"
 sudo /bin/mkdir -p "$INSTALL_DIR/handlers" "$INSTALL_DIR/icons"
 
 sudo /bin/cp "$SCRIPT_DIR/$APP_ID.py"    "$INSTALL_DIR/"
+sudo /bin/cp "$SCRIPT_DIR/bridge_core.py" "$INSTALL_DIR/"
 sudo /bin/cp "$SCRIPT_DIR/VERSION"       "$INSTALL_DIR/"
 sudo /bin/cp "$SCRIPT_DIR/LICENSE"       "$INSTALL_DIR/"
 sudo /bin/cp "$SCRIPT_DIR/install.sh"    "$INSTALL_DIR/"

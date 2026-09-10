@@ -639,7 +639,8 @@ def _build_client() -> HAClient | None:
         for a in aliases:
             p = a.get("page", "Home")
             if p not in seen:
-                pages.append(p); seen.add(p)
+                pages.append(p)
+                seen.add(p)
         if not pages:
             pages = ["Home"]
     client = HAClient(url, token, aliases, pages)
@@ -795,7 +796,8 @@ if __name__ == "__main__":
         try:
             raw = input("HA> ").strip()
         except (EOFError, KeyboardInterrupt):
-            print(); break
+            print()
+            break
         if raw in ("quit", "exit", "q"):
             break
         if not raw:
